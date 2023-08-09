@@ -1,0 +1,10 @@
+wavs/LJ050-0269.wav
+wavs/LJ050-0270.wav
+wavs/LJ050-0271.wav
+wavs/LJ050-0272.wav
+wavs/LJ050-0273.wav
+wavs/LJ050-0274.wav
+wavs/LJ050-0275.wav
+wavs/LJ050-0276.wav
+wavs/LJ050-0277.wav
+wavs/LJ050-0278.wav

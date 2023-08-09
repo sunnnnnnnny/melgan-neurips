@@ -16,7 +16,7 @@ from pathlib import Path
 
 def parse_args():
     parser = argparse.ArgumentParser()
-    parser.add_argument("--save_path", required=True)
+    parser.add_argument("--save_path", default="logs/baseline")
     parser.add_argument("--load_path", default=None)
 
     parser.add_argument("--n_mel_channels", type=int, default=80)
@@ -30,7 +30,7 @@ def parse_args():
     parser.add_argument("--lambda_feat", type=float, default=10)
     parser.add_argument("--cond_disc", action="store_true")
 
-    parser.add_argument("--data_path", default=None, type=Path)
+    parser.add_argument("--data_path", default="/Users/zhangsan/Workspace/vocoder_class/melgan-neurips", type=Path)
     parser.add_argument("--batch_size", type=int, default=16)
     parser.add_argument("--seq_len", type=int, default=8192)
 
@@ -59,14 +59,14 @@ def main():
     #######################
     # Load PyTorch Models #
     #######################
-    netG = Generator(args.n_mel_channels, args.ngf, args.n_residual_layers).cuda()
+    netG = Generator(args.n_mel_channels, args.ngf, args.n_residual_layers)
     netD = Discriminator(
         args.num_D, args.ndf, args.n_layers_D, args.downsamp_factor
-    ).cuda()
-    fft = Audio2Mel(n_mel_channels=args.n_mel_channels).cuda()
+    )
+    fft = Audio2Mel(n_mel_channels=args.n_mel_channels)
 
-    print(netG)
-    print(netD)
+    # print(netG)
+    # print(netD)
 
     #####################
     # Create optimizers #
@@ -102,10 +102,10 @@ def main():
     test_voc = []
     test_audio = []
     for i, x_t in enumerate(test_loader):
-        x_t = x_t.cuda()
+        x_t = x_t
         s_t = fft(x_t).detach()
 
-        test_voc.append(s_t.cuda())
+        test_voc.append(s_t)
         test_audio.append(x_t)
 
         audio = x_t.squeeze().cpu()
@@ -125,27 +125,22 @@ def main():
     steps = 0
     for epoch in range(1, args.epochs + 1):
         for iterno, x_t in enumerate(train_loader):
-            x_t = x_t.cuda()
+            x_t = x_t
             s_t = fft(x_t).detach()
-            x_pred_t = netG(s_t.cuda())
-
+            x_pred_t = netG(s_t)
             with torch.no_grad():
                 s_pred_t = fft(x_pred_t.detach())
                 s_error = F.l1_loss(s_t, s_pred_t).item()
-
             #######################
             # Train Discriminator #
             #######################
-            D_fake_det = netD(x_pred_t.cuda().detach())
-            D_real = netD(x_t.cuda())
-
+            D_fake_det = netD(x_pred_t.detach()) # x_pred_t [16,8192] D_fake_det [3*7] 不同尺度特征
+            D_real = netD(x_t)  # x_t [16,8192] D_real [3*7] 不同尺度特征
             loss_D = 0
             for scale in D_fake_det:
-                loss_D += F.relu(1 + scale[-1]).mean()
-
+                loss_D += F.relu(1 + scale[-1]).mean() # len(scale)=7  scale[-1].shape [16,1,32] 希望预测越接近于-1
             for scale in D_real:
-                loss_D += F.relu(1 - scale[-1]).mean()
-
+                loss_D += F.relu(1 - scale[-1]).mean()  # len(scale)=7 scale[-1].shape [16,1,32] 希望真实越接近于1
             netD.zero_grad()
             loss_D.backward()
             optD.step()
@@ -153,22 +148,22 @@ def main():
             ###################
             # Train Generator #
             ###################
-            D_fake = netD(x_pred_t.cuda())
+            D_fake = netD(x_pred_t)  # len(D_fake)=3  len(D_fake[0])=7
 
             loss_G = 0
             for scale in D_fake:
-                loss_G += -scale[-1].mean()
+                loss_G += -scale[-1].mean() # scale[-1].shape [16,1,32] leakyRelu
 
             loss_feat = 0
-            feat_weights = 4.0 / (args.n_layers_D + 1)
-            D_weights = 1.0 / args.num_D
+            feat_weights = 4.0 / (args.n_layers_D + 1)  # args.n_layers_D = 4  feat_weights=4/5=0.8
+            D_weights = 1.0 / args.num_D  # D_weights = 1.0/3=0.33
             wt = D_weights * feat_weights
             for i in range(args.num_D):
                 for j in range(len(D_fake[i]) - 1):
                     loss_feat += wt * F.l1_loss(D_fake[i][j], D_real[i][j].detach())
 
             netG.zero_grad()
-            (loss_G + args.lambda_feat * loss_feat).backward()
+            (loss_G + args.lambda_feat * loss_feat).backward()  # args.lambda_feat = 10
             optG.step()
 
             ######################
@@ -226,3 +221,244 @@ def main():
 
 if __name__ == "__main__":
     main()
+"""
+netG:
+Generator(
+  (model): Sequential(
+    (0): ReflectionPad1d((3, 3)) 填补左右边界 以镜像的方式
+    (1): Conv1d(80, 512, kernel_size=(7,), stride=(1,))
+    (2): LeakyReLU(negative_slope=0.2)
+    (3): ConvTranspose1d(512, 256, kernel_size=(16,), stride=(8,), padding=(4,))
+    (4): ResnetBlock(
+      (block): Sequential(
+        (0): LeakyReLU(negative_slope=0.2)
+        (1): ReflectionPad1d((1, 1))
+        (2): Conv1d(256, 256, kernel_size=(3,), stride=(1,))
+        (3): LeakyReLU(negative_slope=0.2)
+        (4): Conv1d(256, 256, kernel_size=(1,), stride=(1,))
+      )
+      (shortcut): Conv1d(256, 256, kernel_size=(1,), stride=(1,))
+    )
+    (5): ResnetBlock(
+      (block): Sequential(
+        (0): LeakyReLU(negative_slope=0.2)
+        (1): ReflectionPad1d((3, 3))
+        (2): Conv1d(256, 256, kernel_size=(3,), stride=(1,), dilation=(3,))
+        (3): LeakyReLU(negative_slope=0.2)
+        (4): Conv1d(256, 256, kernel_size=(1,), stride=(1,))
+      )
+      (shortcut): Conv1d(256, 256, kernel_size=(1,), stride=(1,))
+    )
+    (6): ResnetBlock(
+      (block): Sequential(
+        (0): LeakyReLU(negative_slope=0.2)
+        (1): ReflectionPad1d((9, 9))
+        (2): Conv1d(256, 256, kernel_size=(3,), stride=(1,), dilation=(9,))
+        (3): LeakyReLU(negative_slope=0.2)
+        (4): Conv1d(256, 256, kernel_size=(1,), stride=(1,))
+      )
+      (shortcut): Conv1d(256, 256, kernel_size=(1,), stride=(1,))
+    )
+    (7): LeakyReLU(negative_slope=0.2)
+    (8): ConvTranspose1d(256, 128, kernel_size=(16,), stride=(8,), padding=(4,))
+    (9): ResnetBlock(
+      (block): Sequential(
+        (0): LeakyReLU(negative_slope=0.2)
+        (1): ReflectionPad1d((1, 1))
+        (2): Conv1d(128, 128, kernel_size=(3,), stride=(1,))
+        (3): LeakyReLU(negative_slope=0.2)
+        (4): Conv1d(128, 128, kernel_size=(1,), stride=(1,))
+      )
+      (shortcut): Conv1d(128, 128, kernel_size=(1,), stride=(1,))
+    )
+    (10): ResnetBlock(
+      (block): Sequential(
+        (0): LeakyReLU(negative_slope=0.2)
+        (1): ReflectionPad1d((3, 3))
+        (2): Conv1d(128, 128, kernel_size=(3,), stride=(1,), dilation=(3,))
+        (3): LeakyReLU(negative_slope=0.2)
+        (4): Conv1d(128, 128, kernel_size=(1,), stride=(1,))
+      )
+      (shortcut): Conv1d(128, 128, kernel_size=(1,), stride=(1,))
+    )
+    (11): ResnetBlock(
+      (block): Sequential(
+        (0): LeakyReLU(negative_slope=0.2)
+        (1): ReflectionPad1d((9, 9))
+        (2): Conv1d(128, 128, kernel_size=(3,), stride=(1,), dilation=(9,))
+        (3): LeakyReLU(negative_slope=0.2)
+        (4): Conv1d(128, 128, kernel_size=(1,), stride=(1,))
+      )
+      (shortcut): Conv1d(128, 128, kernel_size=(1,), stride=(1,))
+    )
+    (12): LeakyReLU(negative_slope=0.2)
+    (13): ConvTranspose1d(128, 64, kernel_size=(4,), stride=(2,), padding=(1,))
+    (14): ResnetBlock(
+      (block): Sequential(
+        (0): LeakyReLU(negative_slope=0.2)
+        (1): ReflectionPad1d((1, 1))
+        (2): Conv1d(64, 64, kernel_size=(3,), stride=(1,))
+        (3): LeakyReLU(negative_slope=0.2)
+        (4): Conv1d(64, 64, kernel_size=(1,), stride=(1,))
+      )
+      (shortcut): Conv1d(64, 64, kernel_size=(1,), stride=(1,))
+    )
+    (15): ResnetBlock(
+      (block): Sequential(
+        (0): LeakyReLU(negative_slope=0.2)
+        (1): ReflectionPad1d((3, 3))
+        (2): Conv1d(64, 64, kernel_size=(3,), stride=(1,), dilation=(3,))
+        (3): LeakyReLU(negative_slope=0.2)
+        (4): Conv1d(64, 64, kernel_size=(1,), stride=(1,))
+      )
+      (shortcut): Conv1d(64, 64, kernel_size=(1,), stride=(1,))
+    )
+    (16): ResnetBlock(
+      (block): Sequential(
+        (0): LeakyReLU(negative_slope=0.2)
+        (1): ReflectionPad1d((9, 9))
+        (2): Conv1d(64, 64, kernel_size=(3,), stride=(1,), dilation=(9,))
+        (3): LeakyReLU(negative_slope=0.2)
+        (4): Conv1d(64, 64, kernel_size=(1,), stride=(1,))
+      )
+      (shortcut): Conv1d(64, 64, kernel_size=(1,), stride=(1,))
+    )
+    (17): LeakyReLU(negative_slope=0.2)
+    (18): ConvTranspose1d(64, 32, kernel_size=(4,), stride=(2,), padding=(1,))
+    (19): ResnetBlock(
+      (block): Sequential(
+        (0): LeakyReLU(negative_slope=0.2)
+        (1): ReflectionPad1d((1, 1))
+        (2): Conv1d(32, 32, kernel_size=(3,), stride=(1,))
+        (3): LeakyReLU(negative_slope=0.2)
+        (4): Conv1d(32, 32, kernel_size=(1,), stride=(1,))
+      )
+      (shortcut): Conv1d(32, 32, kernel_size=(1,), stride=(1,))
+    )
+    (20): ResnetBlock(
+      (block): Sequential(
+        (0): LeakyReLU(negative_slope=0.2)
+        (1): ReflectionPad1d((3, 3))
+        (2): Conv1d(32, 32, kernel_size=(3,), stride=(1,), dilation=(3,))
+        (3): LeakyReLU(negative_slope=0.2)
+        (4): Conv1d(32, 32, kernel_size=(1,), stride=(1,))
+      )
+      (shortcut): Conv1d(32, 32, kernel_size=(1,), stride=(1,))
+    )
+    (21): ResnetBlock(
+      (block): Sequential(
+        (0): LeakyReLU(negative_slope=0.2)
+        (1): ReflectionPad1d((9, 9))
+        (2): Conv1d(32, 32, kernel_size=(3,), stride=(1,), dilation=(9,))
+        (3): LeakyReLU(negative_slope=0.2)
+        (4): Conv1d(32, 32, kernel_size=(1,), stride=(1,))
+      )
+      (shortcut): Conv1d(32, 32, kernel_size=(1,), stride=(1,))
+    )
+    (22): LeakyReLU(negative_slope=0.2)
+    (23): ReflectionPad1d((3, 3))
+    (24): Conv1d(32, 1, kernel_size=(7,), stride=(1,))
+    (25): Tanh()
+  )
+)
+"""
+
+
+"""
+netD:
+Discriminator(
+  (model): ModuleDict(
+    (disc_0): NLayerDiscriminator(
+      (model): ModuleDict(
+        (layer_0): Sequential(
+          (0): ReflectionPad1d((7, 7))
+          (1): Conv1d(1, 16, kernel_size=(15,), stride=(1,))
+          (2): LeakyReLU(negative_slope=0.2, inplace=True)
+        )
+        (layer_1): Sequential(
+          (0): Conv1d(16, 64, kernel_size=(41,), stride=(4,), padding=(20,), groups=4)
+          (1): LeakyReLU(negative_slope=0.2, inplace=True)
+        )
+        (layer_2): Sequential(
+          (0): Conv1d(64, 256, kernel_size=(41,), stride=(4,), padding=(20,), groups=16)
+          (1): LeakyReLU(negative_slope=0.2, inplace=True)
+        )
+        (layer_3): Sequential(
+          (0): Conv1d(256, 1024, kernel_size=(41,), stride=(4,), padding=(20,), groups=64)
+          (1): LeakyReLU(negative_slope=0.2, inplace=True)
+        )
+        (layer_4): Sequential(
+          (0): Conv1d(1024, 1024, kernel_size=(41,), stride=(4,), padding=(20,), groups=256)
+          (1): LeakyReLU(negative_slope=0.2, inplace=True)
+        )
+        (layer_5): Sequential(
+          (0): Conv1d(1024, 1024, kernel_size=(5,), stride=(1,), padding=(2,))
+          (1): LeakyReLU(negative_slope=0.2, inplace=True)
+        )
+        (layer_6): Conv1d(1024, 1, kernel_size=(3,), stride=(1,), padding=(1,))
+      )
+    )
+    (disc_1): NLayerDiscriminator(
+      (model): ModuleDict(
+        (layer_0): Sequential(
+          (0): ReflectionPad1d((7, 7))
+          (1): Conv1d(1, 16, kernel_size=(15,), stride=(1,))
+          (2): LeakyReLU(negative_slope=0.2, inplace=True)
+        )
+        (layer_1): Sequential(
+          (0): Conv1d(16, 64, kernel_size=(41,), stride=(4,), padding=(20,), groups=4)
+          (1): LeakyReLU(negative_slope=0.2, inplace=True)
+        )
+        (layer_2): Sequential(
+          (0): Conv1d(64, 256, kernel_size=(41,), stride=(4,), padding=(20,), groups=16)
+          (1): LeakyReLU(negative_slope=0.2, inplace=True)
+        )
+        (layer_3): Sequential(
+          (0): Conv1d(256, 1024, kernel_size=(41,), stride=(4,), padding=(20,), groups=64)
+          (1): LeakyReLU(negative_slope=0.2, inplace=True)
+        )
+        (layer_4): Sequential(
+          (0): Conv1d(1024, 1024, kernel_size=(41,), stride=(4,), padding=(20,), groups=256)
+          (1): LeakyReLU(negative_slope=0.2, inplace=True)
+        )
+        (layer_5): Sequential(
+          (0): Conv1d(1024, 1024, kernel_size=(5,), stride=(1,), padding=(2,))
+          (1): LeakyReLU(negative_slope=0.2, inplace=True)
+        )
+        (layer_6): Conv1d(1024, 1, kernel_size=(3,), stride=(1,), padding=(1,))
+      )
+    )
+    (disc_2): NLayerDiscriminator(
+      (model): ModuleDict(
+        (layer_0): Sequential(
+          (0): ReflectionPad1d((7, 7))
+          (1): Conv1d(1, 16, kernel_size=(15,), stride=(1,))
+          (2): LeakyReLU(negative_slope=0.2, inplace=True)
+        )
+        (layer_1): Sequential(
+          (0): Conv1d(16, 64, kernel_size=(41,), stride=(4,), padding=(20,), groups=4)
+          (1): LeakyReLU(negative_slope=0.2, inplace=True)
+        )
+        (layer_2): Sequential(
+          (0): Conv1d(64, 256, kernel_size=(41,), stride=(4,), padding=(20,), groups=16)
+          (1): LeakyReLU(negative_slope=0.2, inplace=True)
+        )
+        (layer_3): Sequential(
+          (0): Conv1d(256, 1024, kernel_size=(41,), stride=(4,), padding=(20,), groups=64)
+          (1): LeakyReLU(negative_slope=0.2, inplace=True)
+        )
+        (layer_4): Sequential(
+          (0): Conv1d(1024, 1024, kernel_size=(41,), stride=(4,), padding=(20,), groups=256)
+          (1): LeakyReLU(negative_slope=0.2, inplace=True)
+        )
+        (layer_5): Sequential(
+          (0): Conv1d(1024, 1024, kernel_size=(5,), stride=(1,), padding=(2,))
+          (1): LeakyReLU(negative_slope=0.2, inplace=True)
+        )
+        (layer_6): Conv1d(1024, 1, kernel_size=(3,), stride=(1,), padding=(1,))
+      )
+    )
+  )
+  (downsample): AvgPool1d(kernel_size=(4,), stride=(2,), padding=(1,))
+)
+"""
